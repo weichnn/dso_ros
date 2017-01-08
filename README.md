@@ -22,7 +22,7 @@ To access computed information in real-time, I recommend to implement your own O
 2. run 
 
 		export DSO_PATH=[PATH_TO_DSO]/dso
-		rosmake
+		rosmake dso_ros
 	
 
 
@@ -50,7 +50,7 @@ removing
 	    fullSystem->outputWrapper = new IOWrap::PangolinDSOViewer(
 	    		 (int)undistorter->getSize()[0],
 	    		 (int)undistorter->getSize()[1]);
-
+			 
 will allow you to use DSO compiled without Pangolin. However, then there is no 3D visualization.
 You can also implement your own Output3DWrapper to fit your needs.
 
