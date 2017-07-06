@@ -36,7 +36,7 @@
 #include "util/Undistort.h"
 #include "IOWrapper/Pangolin/PangolinDSOViewer.h"
 #include "IOWrapper/OutputWrapper/SampleOutputWrapper.h"
-
+#include <opencv2/highgui/highgui.hpp>
 
 #include <ros/ros.h>
 #include <sensor_msgs/image_encodings.h>
@@ -44,11 +44,16 @@
 #include <sensor_msgs/CameraInfo.h>
 #include <geometry_msgs/PoseStamped.h>
 #include "cv_bridge/cv_bridge.h"
-
+#include <message_filters/subscriber.h>
+#include <message_filters/time_synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
 
 std::string calib = "";
 std::string vignetteFile = "";
 std::string gammaFile = "";
+std::string right_calib = "";
+std::string right_vignetteFile = "";
+std::string right_gammaFile = "";
 bool useSampleOutput=false;
 
 using namespace dso;
@@ -127,6 +132,27 @@ void parseArgument(char* arg)
 		return;
 	}
 
+	if(1==sscanf(arg,"right_calib=%s",buf))
+	{
+		right_calib = buf;
+		printf("loading calibration from %s!\n", right_calib.c_str());
+		return;
+	}
+	if(1==sscanf(arg,"right_vignette=%s",buf))
+	{
+		right_vignetteFile = buf;
+		printf("loading vignette from %s!\n", right_vignetteFile.c_str());
+		return;
+	}
+
+	if(1==sscanf(arg,"right_gamma=%s",buf))
+	{
+		right_gammaFile = buf;
+		printf("loading gammaCalib from %s!\n", right_gammaFile.c_str());
+		return;
+	}
+
+
 	printf("could not parse argument \"%s\"!!\n", arg);
 }
 
@@ -135,13 +161,18 @@ void parseArgument(char* arg)
 
 FullSystem* fullSystem = 0;
 Undistort* undistorter = 0;
+Undistort* rightUndistorter = 0;
 int frameID = 0;
 
-void vidCb(const sensor_msgs::ImageConstPtr img)
+void vidCb(const sensor_msgs::ImageConstPtr img, const sensor_msgs::ImageConstPtr imgRight)
 {
 	cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
 	assert(cv_ptr->image.type() == CV_8U);
 	assert(cv_ptr->image.channels() == 1);
+
+	cv_bridge::CvImagePtr right_cv_ptr = cv_bridge::toCvCopy(imgRight, sensor_msgs::image_encodings::MONO8);
+	assert(right_cv_ptr->image.type() == CV_8U);
+	assert(right_cv_ptr->image.channels() == 1);
 
 
 	if(setting_fullResetRequested)
@@ -158,10 +189,42 @@ void vidCb(const sensor_msgs::ImageConstPtr img)
 	}
 
 	MinimalImageB minImg((int)cv_ptr->image.cols, (int)cv_ptr->image.rows,(unsigned char*)cv_ptr->image.data);
+	MinimalImageB right_minImg((int)right_cv_ptr->image.cols, (int)right_cv_ptr->image.rows,(unsigned char*)right_cv_ptr->image.data);
+
 	ImageAndExposure* undistImg = undistorter->undistort<unsigned char>(&minImg, 1,0, 1.0f);
-	fullSystem->addActiveFrame(undistImg, frameID);
+	ImageAndExposure* rightUndistImg = rightUndistorter->undistort<unsigned char>(&right_minImg, 1,0, 1.0f);
+
+	// cv::Mat ori(312, 672, CV_32FC1, undistImg->image);
+	// cv::Mat ano(312, 672, CV_32FC1, rightUndistImg->image);
+	// ori.convertTo(ori, CV_8UC1);
+	// ano.convertTo(ano, CV_8UC1);
+	// cv::rectangle( ori,
+ //           cv::Point( 300, 150),
+ //           cv::Point( 300, 150),
+ //           255,
+ //           -1,
+ //           8 );
+	// // cv::line(ano,cv::Point(0,144),cv::Point(672,144),255);
+	// // cv::line(ano,cv::Point(0,146),cv::Point(672,146),255);
+	// cv::line(ano,cv::Point(0,148),cv::Point(672,148),255);
+	// cv::line(ano,cv::Point(0,150),cv::Point(672,150),255);
+	// // for (int i = 0; i < 10; ++i)
+	// // {
+	// // 	printf("%f\n", undistImg->image[i]);
+	// // }
+	// // std::cout << ano << std::endl;
+	// cv::imshow("ori",ori);
+	// cv::imshow("line",ano);
+	// cv::waitKey(0); 
+	  
+	std::vector<ImageAndExposure*> minImgVector;
+	minImgVector.push_back(rightUndistImg);
+	
+	fullSystem->addActiveFrame(undistImg, frameID, minImgVector);
 	frameID++;
 	delete undistImg;
+	delete rightUndistImg;
+
 
 }
 
@@ -195,7 +258,7 @@ int main( int argc, char** argv )
 	setting_affineOptModeB = 0;
 
 
-
+	setCameraNum(2);
     undistorter = Undistort::getUndistorterForFile(calib, gammaFile, vignetteFile);
 
     setGlobalCalib(
@@ -203,10 +266,22 @@ int main( int argc, char** argv )
             (int)undistorter->getSize()[1],
             undistorter->getK().cast<float>());
 
+    rightUndistorter = Undistort::getUndistorterForFile(right_calib, right_gammaFile, right_vignetteFile);
+
+
+
+    setGlobalCalibOthers(
+            (int)rightUndistorter->getSize()[0],
+            (int)rightUndistorter->getSize()[1],
+            rightUndistorter->getK().cast<float>(),
+            0);
+
+
+    
 
     fullSystem = new FullSystem();
     fullSystem->linearizeOperation=false;
-
+    
 
     if(!disableAllDisplay)
 	    fullSystem->outputWrapper.push_back(new IOWrap::PangolinDSOViewer(
@@ -222,7 +297,13 @@ int main( int argc, char** argv )
     	fullSystem->setGammaFunction(undistorter->photometricUndist->getG());
 
     ros::NodeHandle nh;
-    ros::Subscriber imgSub = nh.subscribe("image", 1, &vidCb);
+    // ros::Subscriber imgSub = nh.subscribe("image", 1, &vidCb);
+
+    message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/left/image_raw", 1);
+    message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "camera/right/image_raw", 1);
+    typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> sync_pol;
+    message_filters::Synchronizer<sync_pol> sync(sync_pol(10), left_sub,right_sub);
+    sync.registerCallback(boost::bind(&vidCb,_1,_2));
 
     ros::spin();
 

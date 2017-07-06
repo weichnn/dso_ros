@@ -54,3 +54,7 @@ rosbuild_add_executable(dso_live src/main.cpp ${SOURCE_FILES})
 target_link_libraries(dso_live ${DSO_LIBRARY} ${Pangolin_LIBRARIES} ${OpenCV_LIBS})
 rosbuild_link_boost(dso_live thread)
 
+rosbuild_add_executable(dso_stereo_live src/stereo.cpp)
+target_link_libraries(dso_stereo_live ${DSO_LIBRARY} ${Pangolin_LIBRARIES} ${OpenCV_LIBS})
+rosbuild_link_boost(dso_stereo_live thread)
+
